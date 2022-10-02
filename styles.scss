@@ -1,0 +1,44 @@
+/*-- scss:defaults --*/
+
+$theme-red: #e41a1c;
+$theme-blue: #377eb8;
+$theme-green: #4daf4a;
+$theme-purple: #984ea3;
+$theme-orange: #ff7f00;
+$theme-light: #ffff33;
+
+/*-- scss:rules --*/
+
+.orange {
+  color: $theme-orange;
+  font-weight: bold;
+}
+
+.red {
+  color: $theme-red;
+  font-weight: bold;
+}
+
+.blue {
+  color: $theme-blue;
+  font-weight: bold;
+}
+
+.green {
+  color: $theme-green;
+  font-weight: bold;
+}
+
+.reveal .title {
+  color: $theme-blue;
+}
+
+.reveal .footer {
+  color: $theme-blue;
+  font-weight: bold;
+}
+
+.textcenter {
+  text-align: center;
+}
+

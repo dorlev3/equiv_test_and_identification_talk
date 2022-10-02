@@ -1,0 +1,739 @@
+---
+title: "Equivalence Testing"
+author: "Dor Leventer"
+institue: "TLV U"
+date: "Fall 2022"
+bibliography: bib.bib
+format: 
+  revealjs:
+    highlight: github
+    width: 1600
+    height: 900
+    theme: [default, styles.scss]
+    slide-number: true
+    chalkboard: true
+    footer: "Dor Leventer, Equivalence Tests of Identification Assumptions, Fall 2022"
+---
+
+```{r}
+#| include: false
+library(tidyverse)
+library(fixest)
+library(patchwork)
+```
+
+
+# Introduction {background-color=#377eb8}
+
+## Motivation 
+
+:::{.fragment}
+
+-   All of these causal inference frameworks have assumptions
+    -   RCT: conditional independence $Y(w)$ and $W$
+    -   DID: parallel trends of $Y(0)$ post treatment
+    -   RD: continuity of $\mathbb{E}[Y(w)]$ around the cutoff
+:::
+:::{.fragment}
+-   How do we test if the identification assumption holds?
+    -   Can't directly (else isn't assumption)
+    -   But have suggestive tests, often termed [validation tests]{.green}
+:::
+:::{.fragment}
+[Question:]{.blue} how to perform these validation tests?
+
+:::
+
+## An Example DID Setup
+
+-   Say we have three time periods $t\in\{1,2,3\}$
+-   Say we have treatment $G_i=1$ and control $G_i=0$
+-   And for treatment group, treatment starts at $t=3$
+-   So we need parallel trends (PT). Define for variable $X$ $$\Delta X_{g,t}=\mathbb{E}\left[X_{i,t}-X_{i,t-1}\mid G_i=g\right]$$
+-   Can write PT of $Y(0)$ at time $t=3$ as $$\Delta Y_{1,3}\left(0\right) = \Delta Y_{0,3}\left(0\right)$$
+
+## Testing PT
+
+-   We can never test PT directly, since $Y(0)$ unobserved for $G_i=1$ at $t=3$.
+-   Hence, we usually conduct a suggestive test on trends before treatment
+-   If we assume no anticipation, or, $\forall t<3: Y_{i,t}=Y_{i,t}(0)$
+-   Then can test for $$\Delta Y_{1,2}\left(0\right) = \Delta Y_{0,2}\left(0\right)$$
+-   Using $$\Delta Y_{1,2} = \Delta Y_{0,2}$$
+
+We usually call such a test [pre-trend testing]{.green}.
+
+## The Pre-Trend Test
+
+We now turn to the formal statistical test
+
+-   Lets start with the hypothesis. 
+-   Usually we write the null and alternative as 
+    $$H_0: \Delta Y_{1,2} - \Delta Y_{0,2} = 0$$
+    $$H_1: \Delta Y_{1,2} - \Delta Y_{0,2} \neq 0$$
+
+This has several problems, which we will now go over. 
+
+
+
+
+
+
+# Problems with convential testing methods {background-color=#377eb8}
+
+## Burden of proof of treatment effects
+
+Say, for a second, we are testing whether some treatment has some effect. 
+
+-   Then the hypothesis $$H_0:\theta=0$$ puts the burden of proof on the researcher. 
+-   That is, we assume that there is no treatment effect 
+    -   (opposite of what the researcher wants usually)
+-   And say - assuming there is no effect, lets consider your results
+
+Thats how we construct the test statistic
+
+-   We assume a world where the null is true (or, treatment doesn't work)
+-   And then consider the results
+
+## Burden of proof of parallel trends
+
+Going back to the PT example
+
+-   Our null hypothesis was $$H_0: \Delta Y_{1,2} - \Delta Y_{0,2} = 0$$
+-   Which is to say, identification holds
+-   But this takes away the burden of proof from the researcher!
+-   That is, given $H_0$, the test statistic shows how likely the results are in a world where identification holds. 
+-   This... seems opposite of what we want.
+
+[Point 1]{.blue}: convential testing assumes identification holds, when we want to assume it doesn't. 
+
+## Type I and type II errors of treatment effects
+
+When testing for treatment effects, we (want to?) control for rate of type I error. 
+
+-   Consider the type I and II error table
+
+|   | PT true | PT false |
+|------|:-----------:|:------------:|
+| Reject PT | $\mathbb{P}(\text{PT holds and we reject it})=\alpha$ | $\mathbb{P}(\text{PT doesn't hold and we reject it})=1-\alpha$ |
+| Accept PT | $\mathbb{P}(\text{PT holds and we accept it})=1-\beta$ | $\mathbb{P}(\text{PT doesn't hold and we accept it})=\beta$  |
+
+-   If we want to control for a similar essence as in the previous slide
+-   We want to control for the rate at which we find PT when it doesn't hold
+-   That's $\beta$...
+
+[Point 2]{.blue}: convential testing controls for type I when we want to control for type II. 
+
+
+
+
+
+
+
+
+
+
+
+# Pre-trend event study plots {background-color=#377eb8}
+
+## A visual example
+
+-   To build intuition
+-   Lets consider the confidence intervals of pre-trends in an event study
+-   The exercise
+    -   We start from 99% CI
+    -   Lower to 95%, and then 90%
+    -   While we do this
+    -   Think when $\mathbb{P}(\text{PT doesn't hold and we accept it})=\beta$ increases
+    
+## A visual example
+
+```{r}
+#| include: false
+
+# simulate data using prepared function
+# devtools::install_github("dorlev3/leventerDIDworkshop", force = T)
+simulate_df <- function(nobs = 25, seed = 1, tau_vec = c(2,2)) {
+  set.seed(seed)
+  df <- leventerDIDworkshop::sim_data_mean_shift(nobs = nobs, ngroups = 2, group_treat_order = c(1,2), group_treat_time = c(1990, 9999), tau_vec = tau_vec)
+
+  df <- df |> 
+    mutate(ever_treated = case_when(
+      cohort == 1990 ~ 1,
+      TRUE ~ 0
+    ))
+  return(df)
+}
+
+
+# estimate DID model, save coefficients
+estimate_model <- function(df) {
+  did_mod <- fixest::feols(Y ~ i(year, ever_treated, ref = 1989) | id + year, data = df)
+  did_b <- did_mod %>%
+    broom::tidy() %>%
+    select(term, est = estimate, se = std.error) %>%
+    mutate(term = gsub("year|ever_treated|:", "", term),
+           term = as.numeric(term))
+  return(did_b)
+}
+
+# event study plot function, by CI length
+event_study <- function(did_b, alpha, ylim = c(-3,4)) {
+  ci_alpha <- abs(qnorm(alpha/2))
+
+did_b |> 
+  mutate(term = term - 1990) |> 
+  rbind(data.frame(term = -1, est = 0, se = 0)) |> 
+  mutate(ci_l = est - ci_alpha*se, 
+         ci_h = est + ci_alpha*se) |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(stroke = 1) + 
+  geom_errorbar(aes(ymin = ci_l, ymax = ci_h), width = 0.25) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(ylim)
+}
+```
+
+```{r}
+event_study(did_b = estimate_model(df = simulate_df(seed = 1)), alpha = 0.01) +
+  labs(title = "Alpha = 0.01",
+       subtitle = "Confidence intervals very wide, don't reject PT")
+```
+
+## A visual example
+
+```{r}
+event_study(did_b = estimate_model(df = simulate_df(seed = 1)), alpha = 0.05) +
+  labs(title = "Alpha = 0.05",
+       subtitle = "Less wide, more rejection of PT")
+```
+
+## A visual example
+
+```{r}
+event_study(did_b = estimate_model(df = simulate_df(seed = 1)), alpha = 0.1) +
+  labs(title = "Alpha = 0.1", 
+  subtitle = "Even less wide, more TE reject NULL, but also PT looks worse")
+```
+
+
+
+
+
+
+# Equivalence testing {background-color=#377eb8}
+
+## Lets see what we can do
+
+[Point 1]{.blue}: convential testing assumes identification holds, when we want to assume it doesn't. 
+
+[Point 2]{.blue}: convential testing controls for type I when we want to control for type II. 
+
+-   We want to assume that identification doesn't hold
+-   What about simply switching the hypothesis?
+    $$H_0: \Delta Y_{1,2} - \Delta Y_{0,2} \neq 0$$
+    $$H_1: \Delta Y_{1,2} - \Delta Y_{0,2} = 0$$
+-   But using real data, this makes the null hypothesis (almost) always correct...
+-   Also, what should we assume in the hypothesis? 
+
+$\rightarrow$ next approch please
+
+## Second approach
+
+[Point 1]{.blue}: convential testing assumes identification holds, when we want to assume it doesn't. 
+
+[Point 2]{.blue}: convential testing controls for type I when we want to control for type II. 
+
+-   Okay, so not $\neq0$, but maybe greater than something?
+-   Lets set some parameter $k$, such that
+    $$H_{0}:\Delta Y_{1,2}-\Delta Y_{0,2}>k$$
+    $$H_1: \Delta Y_{1,2}-\Delta Y_{0,2}\leq k$$
+-   Almost there
+-   Problem - negative values / maybe we need a distance metric
+
+## Third approach
+
+[Point 1]{.blue}: convential testing assumes identification holds, when we want to assume it doesn't. 
+
+[Point 2]{.blue}: convential testing controls for type I when we want to control for type II. 
+
+-   Need to take into account negative values $\rightarrow$ absolute difference
+    $$H_{0}:\left|\Delta Y_{1,2}-\Delta Y_{0,2}\right|>k$$
+    $$H_1:\left|\Delta Y_{1,2}-\Delta Y_{0,2}\right|\leq k$$
+
+
+
+
+## A solution to our problems?
+
+We say that the estimator and truth are equivalent if they are less then $k$ apart. 
+
+-   That is the stated alternative hypothesis, what the researcher assumes. 
+$$H_1:\left|\Delta Y_{1,2}-\Delta Y_{0,2}\right|\leq k$$
+-   The null hypothesis, is that this is not true $\rightarrow$ the differene is bigger then $k$ / not equivalent
+$$H_{0}:\left|\Delta Y_{1,2}-\Delta Y_{0,2}\right|>k$$
+
+Hence the first point above is solved. What about controlling for the correct error type?
+
+But first, a statistical test.
+
+
+## Two One-Sided Tests (TOST)
+
+We want to test $H_{0}:\left|\Delta Y_{1,2}-\Delta Y_{0,2}\right|>k$
+
+-   We accpent the null (and reject the alternative) if
+$$\underset{H_{0,A}}{\Delta Y_{1,2}\left(0\right)-\Delta Y_{0,2}\left(0\right)}>k\quad\text{or}\quad\underset{H_{0,B}}{\Delta Y_{1,2}\left(0\right)-\Delta Y_{0,2}\left(0\right)}<-k$$
+-   So if we reject both of these, we reject the null of (PT doesn't hold)
+
+
+## Two one-sided T tests
+
+-   We can construct a test statistic for each (one-sided) hypothesis.
+-   Denote the estimator of the difference by $\widehat{\beta}_2$, and construct the test statistic
+$$T_{A}=\frac{\widehat{\beta}_{2}-k}{\sqrt{\mathbb{V}\left(\widehat{\beta}_{2}\right)}}\quad\text{and}\quad T_{B}=\frac{\widehat{\beta}_{2}+k}{\sqrt{\mathbb{V}\left(\widehat{\beta}_{2}\right)}}$$
+-   Can construct critical values for both using some $t_{\alpha/2}$
+-   If both are unlikely, as in $T_A < -t_{\alpha/2}$ and $T_B > t_{\alpha/2}$, then $H_0$ is unlikely
+
+$\rightarrow$ $\alpha$ now controls for type II error
+
+
+## TOST vs. the convential test
+
+@hartman2018equivalence show that we can do the above test
+
+- By calculating single test statistic, and comparing to uncented $t$ distributions above and below
+- This way of doing the TOST allows a nice comparison to the prior testing method (tentative graph only...)
+
+```{r}
+### graph normal distribution
+
+# some data for graphing normal dist.
+data <- data.frame(X = seq(-6,6,by = 0.01)) |> 
+  mutate(normal = dnorm(X))
+
+# graph normal dist. and reject rate by some alpha
+alpha = 0.05
+C_alpha <- qnorm(1-alpha/2)
+
+g1 <- data |> 
+  ggplot(aes(x = X, y = normal)) + 
+  labs(x = NULL, y = "Density") + 
+  theme_bw() +
+  geom_area(data = data |> filter(X >= -C_alpha & X <= C_alpha), mapping = aes(fill = "Accept"), color = "black", alpha = .75) +
+  geom_area(data = data |> filter(X <= -C_alpha), mapping = aes(fill = "Reject"), color = "black", alpha = .75) +
+  geom_area(data = data |> filter(X >= C_alpha), mapping = aes(fill = "Reject"), color = "black", alpha = .75) + 
+  geom_vline(xintercept = -C_alpha, linetype = "dashed") +
+  geom_vline(xintercept = C_alpha, linetype = "dashed") +
+  scale_fill_brewer(name = NULL, palette = "Dark2") + 
+  labs(subtitle = "Difference in means test") + 
+  theme(legend.position = "none") +
+  xlim(-3,3)
+
+### graph uncentered t distributions
+
+# add uncentered data
+k = 3.2
+data <- data |>
+  mutate(normal_minus = dnorm(X, mean = -k),
+         normal_plus  = dnorm(X, mean = +k))
+
+
+g2 <- data |>
+  ggplot(aes(x = X)) +
+  labs(x = NULL, y = "Density") +
+  theme_bw() +
+  geom_area(data = data |> filter(X <= -C_alpha), mapping = aes(y = normal_minus, fill = "Accept"), color = "black", alpha = .75) +
+  geom_area(data = data |> filter(X >= -C_alpha), mapping = aes(y = normal_minus, fill = "Reject"), color = "black", alpha = .75) +
+  geom_area(data = data |> filter(X >=  C_alpha), mapping = aes(y = normal_plus, fill = "Accept"), color = "black", alpha = .75) +
+  geom_area(data = data |> filter(X <=  C_alpha), mapping = aes(y = normal_plus, fill = "Reject"), color = "black", alpha = .75) +
+  geom_vline(xintercept = -C_alpha, linetype = "dashed") +
+  geom_vline(xintercept = C_alpha, linetype = "dashed") +
+  scale_fill_brewer(name = NULL, palette = "Dark2") +
+  theme(legend.position = "none") +
+  labs(subtitle = "Equivalence testing")
+```
+
+## TOST vs. the convential test
+
+```{r}
+g1 + g2
+```
+
+
+
+
+
+# Lets visualize this {background-color=#377eb8}
+
+
+
+
+
+## Again, a visual example
+
+-   To build intuition
+-   Lets consider the same event study plots us before
+
+## Again, a visual example 
+
+This was the plot from before, using $\alpha = 0.1$
+
+```{r}
+event_study(did_b = estimate_model(df = simulate_df(seed = 1)), alpha = 0.1)
+```
+
+## Again, a visual example 
+
+```{r}
+alpha = .1
+did_b = estimate_model(df = simulate_df(seed = 1))
+
+ci_alpha <- abs(qnorm(alpha/2))
+
+g_dat <- did_b |> 
+  mutate(term = term - 1990) |> 
+  rbind(data.frame(term = -1, est = 0, se = 0)) |> 
+  mutate(ci_l = est - ci_alpha*se, 
+         ci_h = est + ci_alpha*se) 
+
+beta_m5 <- g_dat |> filter(term == -5) |> pull(est) |> as.numeric() |> round(digits = 2)
+```
+
+Lets focus on the period -5. The estimated difference is $`r beta_m5`$. 
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term %in% c(-5)), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term %in% c(-5)), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term %in% c(-5)), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_errorbar(data = g_dat |> filter(term %in% c(-5)),
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-3, 4)
+```
+
+
+## Again, a visual example
+
+```{r}
+k = 2.5
+```
+
+If we set $k=`r k`$, both one sided tests are not rejected, and so deemed equivalent
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term %in% c(-5)), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term %in% c(-5)), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term %in% c(-5)), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_errorbar(data = g_dat |> filter(term %in% c(-5)),
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = +k, linetype = "dashed", color = "blue", size = 1) +
+  geom_hline(yintercept = -k, linetype = "dashed", color = "blue", size = 1) +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-3, 4)
+```
+
+
+## Again, a visual example
+
+```{r}
+k = 1
+```
+
+If we set $k=`r k`$, one test is rejected, and hence deemed not equivalent (PT fails)
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term %in% c(-5)), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term %in% c(-5)), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term %in% c(-5)), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_errorbar(data = g_dat |> filter(term %in% c(-5)),
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = +k, linetype = "dashed", color = "blue", size = 1) +
+  geom_hline(yintercept = -k, linetype = "dashed", color = "blue", size = 1) +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-3, 4)
+```
+
+
+
+
+
+## Again, a visual example
+
+To build more intuition, consider $t=-6$. Zero is not rejected.
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term %in% c(-6)), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term %in% c(-6)), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term %in% c(-6)), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_errorbar(data = g_dat |> filter(term %in% c(-6)),
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  # geom_hline(yintercept = beta_m5+k, linetype = "dashed", color = "blue", size = 1) +
+  # geom_hline(yintercept = beta_m5-k, linetype = "dashed", color = "blue", size = 1) +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-3, 4)
+```
+
+## Again, a visual example
+
+```{r}
+k = 0.5
+beta_m6 <- g_dat |> filter(term == -6) |> pull(est) |> as.numeric() |> round(digits = 2)
+```
+
+If we set $k = `r k`$, zero is accepted (not different) but equivalence is rejected (yes different)
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term %in% c(-6)), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term %in% c(-6)), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term %in% c(-6)), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_errorbar(data = g_dat |> filter(term %in% c(-6)),
+                mapping = aes(ymin = ci_l, ymax = ci_h)) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = +k, linetype = "dashed", color = "blue", size = 1) +
+  geom_hline(yintercept = -k, linetype = "dashed", color = "blue", size = 1) +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-3, 4)
+```
+
+
+
+
+
+
+
+
+
+# Next problem: how to choose $k$? {background-color=#377eb8}
+
+## Equivalence range and interval 
+
+@hartman2018equivalence discuss these tests in the context of balance tables for RCTs
+
+-   First, suggest that expert domain knowledge is best
+
+In most of our context, seems hard to argue for correct range
+
+-   So discuss some default values
+-   The minimal range of $k$ that rejects $H_0$ at wanted level $\alpha$ -- termed equivalence range
+-   Within some pre-determined range, 0.36 of SD of the covariate in the control group -- termed equivalence confidence interval
+
+## Equivalence range and interval 
+
+Lets again look at a tenative graph
+
+```{r}
+
+df = simulate_df(nobs = 300, seed = 1, tau_vec = c(.5, .5)) |> filter(year >= 1985 & year <= 1995)
+did_b = estimate_model(df = df)
+
+alpha = .1
+ci_alpha <- abs(qnorm(alpha/2))
+
+g_dat <- did_b |> 
+  mutate(term = term - 1990) |> 
+  rbind(data.frame(term = -1, est = 0, se = 0)) |> 
+  mutate(ci_l = est - ci_alpha*se, 
+         ci_h = est + ci_alpha*se) 
+
+event_study(did_b, alpha = 0.1, ylim = c(-1,1.5)) + 
+  scale_x_continuous(breaks = seq(-5, 5, 1), limits = c(-5.5, 5.5))
+```
+
+## Equivalence range and interval 
+
+Lets focus on the pre-trends
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term < -1), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term < -1), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term < -1), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h), width = 0.25) + 
+  geom_errorbar(data = g_dat |> filter(term < -1),
+                mapping = aes(ymin = ci_l, ymax = ci_h), width = 0.25) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  # geom_hline(yintercept = beta_m5+k, linetype = "dashed", color = "blue", size = 1) +
+  # geom_hline(yintercept = beta_m5-k, linetype = "dashed", color = "blue", size = 1) +
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-1,1.5) + 
+  scale_x_continuous(breaks = seq(-5, 5, 1), limits = c(-5.5, 5.5))
+```
+
+## Equivalence range and interval 
+
+Get rid of conventional error bars
+
+```{r}
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term < -1), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term < -1), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term < -1), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h), width = 0.25) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-1,1.5) + 
+  scale_x_continuous(breaks = seq(-5, 5, 1), limits = c(-5.5, 5.5))
+```
+
+## Equivalence range and interval 
+
+Add equivalence range - minimal $k$ that rejects $H_0$ of not equivalent at $\alpha=0.05$
+
+```{r}
+
+alpha = .05
+ci_alpha <- abs(qnorm(alpha/2))
+
+g_dat <- did_b |> 
+  mutate(term = term - 1990) |> 
+  rbind(data.frame(term = -1, est = 0, se = 0)) |> 
+  mutate(ci_l = est - ci_alpha*se, 
+         ci_h = est + ci_alpha*se)  |> 
+  group_by(term) |> 
+  mutate(min_k = max(abs(ci_l), abs(ci_h))) |> 
+  ungroup() |> 
+  mutate(min_k_inv = -min_k)
+
+
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term < -1), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term < -1), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term < -1), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h), width = 0.25) + 
+  geom_linerange(data = g_dat |> filter(term < -1),
+                 mapping = aes(ymin = min_k_inv, ymax = min_k)) +
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-1,1.5) + 
+  scale_x_continuous(breaks = seq(-5, 5, 1), limits = c(-5.5, 5.5))
+```
+
+## Equivalence range and interval 
+
+Add equivalence interval - 0.36 standard deviation in control group
+
+```{r}
+g_dat <- g_dat |> 
+  group_by(term) |> 
+  mutate(min_k = max(abs(ci_l), abs(ci_h))) |> 
+  ungroup() |> 
+  mutate(min_k_inv = -min_k)
+
+sd_control <- df |> 
+  filter(ever_treated == 0 & year < 1990) |> 
+  pull(Y) |> 
+  sd()
+  
+
+
+g_dat |> 
+  ggplot(aes(x = term, y = est)) +
+  geom_point(data = g_dat |> filter(!term < -1), stroke = 1, color = "gray", alpha = .5) +
+  geom_point(data = g_dat |> filter(term < -1), stroke = 2) + 
+  geom_errorbar(data = g_dat |> filter(!term < -1), color = "gray", alpha = .5,
+                mapping = aes(ymin = ci_l, ymax = ci_h), width = 0.25) + 
+  geom_linerange(data = g_dat |> filter(term < -1),
+                 mapping = aes(ymin = min_k_inv, ymax = min_k)) +
+  geom_segment(x = -1, xend = -10, y = (sd_control*0.36), yend = (sd_control*0.36), linetype = "dashed") +
+  geom_segment(x = -1, xend = -10, y = (-sd_control*0.36), yend = (-sd_control*0.36), linetype = "dashed") +
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "red") + 
+  labs(x = "Relative Event Time", 
+       y = "Estimated Treatment Effect +/- CI\n (relative to -1)") + 
+  theme_bw(base_size = 18) + 
+  ylim(-1, 1.5) + 
+  scale_x_continuous(breaks = seq(-5, 5, 1), limits = c(-5.5, 5.5))
+```
+
+
+
+
+# Closing remarks {background-color=#377eb8}
+
+## More to read
+
+There is some interesting stuff going on in this area
+
+-   We already saw equivalence testing equiv. tests for CIA in RCTs
+    -   @hartman2018equivalence
+-   Equiv. testing in DID:
+    -   @bilinski2018nothing have a nice discussion on relaxing PT assumptions in the regression
+    -   @liu2021practical discuss the implementation of @hartman2018equivalence to DID and PT in more depth, also combining with new TWFE / imputation estimators
+-   Equiv. testing in RD 
+    -   @hartman2021equivalence discuss tests of null of discontinuity of covariates, and has a nice application on RD and close elections
+    
+
+## Summary: main pros and cons
+
+[Main pro:]{.blue}
+
+-   Correct testing procedure!
+
+[Main con:]{.red}
+
+-   Need to argue for your choice of $k$...
+
+But, maybe not a con? This is more work for researchers (arg, again with the econometricians producing work for applied...)
+
+-   But, allows the researcher to transparently encode the identification assumption and validation test.
+
+## And thats it!
+
+Thanks for listening. 
+
+All code (and hence slides) is available at Git repo <https://github.com/dorlev3/equiv_test_and_identification_talk>
+
+
+
+
+## References
+
+::: {#refs}
+:::
